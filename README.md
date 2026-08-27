@@ -1,4 +1,4 @@
-# aftersale-cs · 售后智能客服多 Agent 系统
+# aftersale-agent · 售后智能客服多 Agent 系统
 
 基于 **LangGraph（Supervisor 多 Agent 编排）** 的售后客服中枢：先**分类** → 再**检索**企业 FAQ 标准答案 → 再**生成成稿** → 最后经**人工确认**才对外发送。已集成 **JWT 用户鉴权 + 双层接口限流（IP/用户）** 与 **前端交互 UI**。
 
