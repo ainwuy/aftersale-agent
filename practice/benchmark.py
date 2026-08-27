@@ -13,6 +13,7 @@ benchmark.py —— 测试集批量跑（模块 11 核心组件 1）
 """
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import List, Optional
 
 # ---------- 测试集（与客服 FAQ 主题对齐，可在真实场景扩展）----------
@@ -101,17 +102,15 @@ class BenchmarkRunner:
         import cs_supervisor as cs
         from langgraph.types import Command
 
-        # 关键：把 stub 或真实 llm 注入 supervisor（supervisor 内部用模块级 cs.llm）
-        if self.llm is None:
-            cs.llm = self._make_stub_llm()
-        else:
-            cs.llm = self.llm
-
         sid = f"bench-{uuid.uuid4().hex[:8]}"
         thread = cs.thread_cfg(sid)
         t0 = time.time()
         ok = True
+        # 注入 stub 或真实 llm：cs_supervisor 节点引用模块级 cs.llm，用后必须恢复原值
+        # （避免与 api_server 等其他调用方互相污染全局状态）
+        original_llm = cs.llm
         try:
+            cs.llm = self._make_stub_llm() if self.llm is None else self.llm
             result = cs.app.invoke(cs.new_session_input(case["question"]), thread)
             # 自动人工审批（图停在 human_approve）
             while "__interrupt__" in result:
@@ -126,6 +125,8 @@ class BenchmarkRunner:
             self.metrics.counter("errors")
             return {"case": case, "ok": False, "elapsed": elapsed,
                     "error": f"{type(e).__name__}: {str(e)[:120]}"}
+        finally:
+            cs.llm = original_llm
 
         elapsed = time.time() - t0
         state = cs.app.get_state(thread).values if cs.app.get_state(thread) else {}
@@ -137,8 +138,8 @@ class BenchmarkRunner:
             "draft": state.get("draft", ""),
             "status": "completed" if ok else "failed",
             "review_count": state.get("review_count", 0),
-            "created_at": __import__("datetime").datetime.now().isoformat(),
-            "completed_at": __import__("datetime").datetime.now().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
         }
         # 打点 + 评估
         self.metrics.counter("requests")

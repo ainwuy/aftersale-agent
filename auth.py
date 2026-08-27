@@ -15,6 +15,7 @@ import os
 import secrets
 import sqlite3
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -26,11 +27,19 @@ from pydantic import BaseModel
 
 # ===== 配置（环境变量可覆盖）=====
 DB_PATH = Path(__file__).parent / "users.db"                 # 用户库（建议加入 .gitignore）
-JWT_SECRET = os.getenv("AFTERSALE_JWT_SECRET", "dev-secret-change-me-in-production-please-32bytes")
+_DEFAULT_JWT_SECRET = "dev-secret-change-me-in-production-please-32bytes"
+JWT_SECRET = os.getenv("AFTERSALE_JWT_SECRET") or _DEFAULT_JWT_SECRET
+if JWT_SECRET == _DEFAULT_JWT_SECRET:
+    print("[auth] ⚠️ 警告：AFTERSALE_JWT_SECRET 未配置或为默认值！"
+          "任何人可用公开源码的默认密钥伪造 JWT 令牌冒充任意用户。"
+          "生产环境务必执行 python -c \"import secrets;print(secrets.token_hex(32))\" 并将结果写入 .env")
 JWT_ALGO = "HS256"
 TOKEN_TTL_HOURS = 24                                         # Token 有效期
 ADMIN_USER = "admin"
 ADMIN_PASS = os.getenv("AFTERSALE_ADMIN_PASS", "admin123")   # 内置管理员初始密码
+if ADMIN_PASS == "admin123":
+    print("[auth] ⚠️ 警告：内置管理员 admin 使用默认密码 admin123！"
+          "生产环境务必通过 AFTERSALE_ADMIN_PASS 环境变量修改。")
 PBKDF2_ITERATIONS = 100_000                                  # 密码哈希迭代次数
 
 _bearer = HTTPBearer(auto_error=False)  # 从请求头解析 Bearer token，缺失时不直接报错
@@ -52,10 +61,16 @@ def _verify_password(password: str, salt_hex: str, hash_hex: str) -> bool:
 
 
 # ===== SQLite 用户表 =====
+@contextmanager
 def _conn() -> sqlite3.Connection:
+    """连接上下文：with 块结束时提交事务并关闭连接（避免句柄泄漏）。"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row                            # 行按字段名访问
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _init_db() -> None:

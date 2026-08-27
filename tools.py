@@ -7,6 +7,8 @@
 - request_return(order_no, reason): 申请退货
 - request_refund(order_no, amount, reason): 申请退款
 """
+import json
+
 from langchain_core.tools import tool
 import order_system as ods
 
@@ -17,7 +19,6 @@ def lookup_order(order_no: str) -> str:
     order_no: 订单号，如 CS20260820001
     返回订单的 JSON 字符串；订单不存在时明确说明。
     """
-    import json
     o = ods.get_order(order_no)
     if not o:
         return f"订单 {order_no} 不存在，请确认订单号是否正确"
@@ -30,7 +31,6 @@ def list_user_orders(username: str) -> str:
     username: 用户名，如 alice / bob
     返回订单列表的 JSON 字符串；为空时说明该用户无订单。
     """
-    import json
     orders = ods.list_user_orders(username)
     if not orders:
         return f"用户 {username} 暂无任何订单"
@@ -43,7 +43,6 @@ def track_logistics(tracking_no: str) -> str:
     tracking_no: 物流单号，如 SF1029384756
     返回物流详情 JSON；单号不存在时明确说明。
     """
-    import json
     s = ods.track_shipment(tracking_no)
     if not s:
         return f"物流单号 {tracking_no} 不存在"
@@ -57,7 +56,6 @@ def request_return(order_no: str, reason: str) -> str:
     reason: 退货原因（如尺码不合适 / 商品不喜欢 / 质量问题）
     返回处理结果 JSON：成功或失败原因。
     """
-    import json
     return json.dumps(ods.create_return_order(order_no, reason), ensure_ascii=False, indent=2)
 
 
@@ -69,7 +67,6 @@ def request_refund(order_no: str, amount: float, reason: str) -> str:
     reason: 退款原因
     返回处理结果 JSON，含退款单号 refund_no。
     """
-    import json
     return json.dumps(ods.apply_refund(order_no, amount, reason), ensure_ascii=False, indent=2)
 
 

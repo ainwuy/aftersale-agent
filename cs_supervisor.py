@@ -26,14 +26,21 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
 
+# ===== 可配置项（.env 覆盖，对应 .env.example）=====
+MODEL = os.getenv("AFTERSALE_MODEL", "qwen3.7-plus-2026-05-26")
+TIMEOUT = int(os.getenv("AFTERSALE_TIMEOUT", "120"))
+MAX_RETRIES = int(os.getenv("AFTERSALE_MAX_RETRIES", "2"))
+MAX_STEP = int(os.getenv("AFTERSALE_MAX_STEP", "8"))
+MAX_REJECT = int(os.getenv("AFTERSALE_MAX_REJECT", "2"))
+
 # ===== LLM（与 supervisor_demo 同配置，复用 QWEN key）=====
 llm = ChatOpenAI(
-    model="qwen3.7-plus-2026-05-26",
+    model=MODEL,
     temperature=0,                       # 路由/分类要稳定，设 0
     api_key=os.getenv("QWEN"),
     base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    timeout=120,
-    max_retries=2,
+    timeout=TIMEOUT,
+    max_retries=MAX_RETRIES,
 )
 
 # ===== 知识库：解析 客服FAQ.md（轻量，不依赖 chromadb）=====
@@ -43,9 +50,10 @@ CLEAN_CATEGORIES = ["售前咨询", "下单与支付", "发货与物流", "退�
 
 
 def _clean_cat(tag: str) -> str:
-    """把 '四、退换货与售后类（高频）' 这类长名清洗为 '退换货与售后'。"""
+    """把 '四、退换货与售后类（高频）'、'退换货与售后类（自动补全）' 这类长名清洗为标准大类。"""
     tag = re.sub(r'^[一二三四五六七八九十]+、', '', tag)   # 去序号
     tag = re.sub(r'（高频）', '', tag)                    # 去高频标注
+    tag = re.sub(r'（自动补全）', '', tag)                # 去自动补全标注（quality_inspector 追加的条目）
     tag = re.sub(r'类$', '', tag)                         # 去末尾「类」
     return tag.strip()
 
@@ -185,8 +193,8 @@ class Category(TypedDict):
 
 # ===== Supervisor（决策清单，禁止跳步）=====
 def supervisor(state):
-    if state.get("step", 0) >= 8:
-        print("  ⚠️ 达到循环上限(8),强制 FINISH")
+    if state.get("step", 0) >= MAX_STEP:
+        print(f"  ⚠️ 达到循环上限({MAX_STEP}),强制 FINISH")
         return {"next": "FINISH"}
     print(f"\n🧠 主管思考中... (第 {state.get('step', 0) + 1} 轮)")
     status = (f"当前状态 -> 分类={state.get('category') or '未分类'}; "
@@ -252,8 +260,9 @@ def classify(state):
     ])
     c = cat["category"]
     print(f"  ✓ 分类结果: {c}  (耗时 {round(time.time() - t, 1)}s)")
-    # 把分类结论写进对话历史,方便主管后续判断;同时存结构化字段
-    return {"messages": [AIMessage(f"【分类】用户问题属于：{c}")], "category": c}
+    # 分类结论只写结构化字段 category，不写进对话历史：
+    # 主管靠 status 文本判断进度，LLM 不需要看到【分类】消息；多轮会话可避免消息历史无限膨胀。
+    return {"category": c}
 
 
 # ===== 检索 Agent =====
@@ -326,11 +335,11 @@ def human_approve(state):
     decision = interrupt({
         "type": "approval",
         "draft": draft,
-        "question": "请审核客服回复成稿。approve=发送 / reject=退回修改(最多2次后强制发送)。",
+        "question": f"请审核客服回复成稿。approve=发送 / reject=退回修改(最多{MAX_REJECT}次后强制发送)。",
     })
     action = (decision or {}).get("action", "approve")
     reviews = state.get("review_count", 0)
-    if action == "reject" and reviews < 2:
+    if action == "reject" and reviews < MAX_REJECT:
         feedback = (decision or {}).get("feedback", "")
         print(f"  ↩️ 人工退回修改(第 {reviews + 1} 次): {feedback}")
         return {

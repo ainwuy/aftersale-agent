@@ -35,6 +35,8 @@ if not exist .env (
   if exist .env.example copy .env.example .env >nul
   rem 生成随机 JWT 密钥（用 PowerShell 生成 48 字符随机串）
   for /f %%i in ('powershell -NoProfile -Command "$chars='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'; -join ((1..48) | ForEach-Object { Get-Random -Maximum $chars.Length | ForEach-Object { $chars[$_] } })"') do set "SECRET=%%i"
+  rem 先删除 .env 中已有的 AFTERSALE_JWT_SECRET 行（避免重复行导致 dotenv 取首个、随机密钥不生效）
+  powershell -NoProfile -Command "(Get-Content .env) -notmatch '^AFTERSALE_JWT_SECRET=' | Set-Content .env"
   echo AFTERSALE_JWT_SECRET=%SECRET%>> .env
   echo [OK] .env 已生成（JWT_SECRET 已随机化）
 ) else (

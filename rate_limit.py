@@ -38,11 +38,20 @@ class RateLimiter:
     （FastAPI 同步端点跑在线程池，多个请求可同时到达）。
     """
 
+    # key 数超过该阈值时清理一次空队列，防止海量 IP 长期占用内存
+    _MAX_KEYS = 10_000
+
     def __init__(self, limit: int, window: int):
         self.limit = limit
         self.window = window
         self._hits: dict[str, deque[float]] = defaultdict(deque)
         self._lock = Lock()
+
+    def _gc(self):
+        """清理已无时间戳的 key（仅在 key 数量膨胀时调用，降低锁竞争）。"""
+        if len(self._hits) > self._MAX_KEYS:
+            for k in [k for k, q in self._hits.items() if not q]:
+                del self._hits[k]
 
     def allow(self, key: str) -> tuple[bool, int, float]:
         """记录一次请求并判断是否放行。
@@ -57,6 +66,7 @@ class RateLimiter:
                 wait = self.window - (now - q[0])
                 return False, 0, round(wait, 1)
             q.append(now)               # 放行并记录本次时间戳
+            self._gc()
             return True, self.limit - len(q), 0.0
 
     def remaining(self, key: str) -> int:

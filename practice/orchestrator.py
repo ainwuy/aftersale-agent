@@ -16,6 +16,7 @@ orchestrator.py —— 端到端编排器（模块 11 核心组件 2）
 """
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from monitoring.logger import setup_logger, event_logger
@@ -54,34 +55,35 @@ class PracticeOrchestrator:
         import cs_supervisor as cs
         from langgraph.types import Command
 
-        if self.llm is None:
-            cs.llm = self._stub_llm()
-        else:
-            cs.llm = self.llm
-
         sid = f"orch-{uuid.uuid4().hex[:8]}"
         thread = cs.thread_cfg(sid)
         self.ev("session_start", session_id=sid, question=question, mode=mode)
         t0 = time.time()
 
-        # 首轮：跑到 human_approve 暂停
-        result = cs.app.invoke(cs.new_session_input(question), thread)
-        state = cs.app.get_state(thread).values
-        draft = state.get("draft", "")
-        self.ev("draft_generated", session_id=sid, draft_len=len(draft))
+        # 注入 stub 或真实 llm：cs_supervisor 节点引用模块级 cs.llm，用后必须恢复原值
+        original_llm = cs.llm
+        try:
+            cs.llm = self._stub_llm() if self.llm is None else self.llm
+            # 首轮：跑到 human_approve 暂停
+            result = cs.app.invoke(cs.new_session_input(question), thread)
+            state = cs.app.get_state(thread).values
+            draft = state.get("draft", "")
+            self.ev("draft_generated", session_id=sid, draft_len=len(draft))
 
-        # 人工审批环节（HITL 演示）
-        if mode == "reject_then_approve":
-            self.ev("human_reject", session_id=sid, feedback="语气请更亲切一些")
-            result = cs.app.invoke(
-                Command(resume={"action": "reject", "feedback": "语气请更亲切一些"}), thread)
-            # 主管重新路由 → 重写成稿 → 再次 interrupt
+            # 人工审批环节（HITL 演示）
+            if mode == "reject_then_approve":
+                self.ev("human_reject", session_id=sid, feedback="语气请更亲切一些")
+                result = cs.app.invoke(
+                    Command(resume={"action": "reject", "feedback": "语气请更亲切一些"}), thread)
+                # 主管重新路由 → 重写成稿 → 再次 interrupt
+                result = cs.app.invoke(
+                    Command(resume={"action": "approve", "feedback": ""}), thread)
+
+            self.ev("human_approve", session_id=sid)
             result = cs.app.invoke(
                 Command(resume={"action": "approve", "feedback": ""}), thread)
-
-        self.ev("human_approve", session_id=sid)
-        result = cs.app.invoke(
-            Command(resume={"action": "approve", "feedback": ""}), thread)
+        finally:
+            cs.llm = original_llm
         elapsed = time.time() - t0
 
         state = cs.app.get_state(thread).values if cs.app.get_state(thread) else {}
@@ -93,8 +95,8 @@ class PracticeOrchestrator:
             "draft": state.get("draft", ""),
             "status": "completed",
             "review_count": state.get("review_count", 0),
-            "created_at": __import__("datetime").datetime.now().isoformat(),
-            "completed_at": __import__("datetime").datetime.now().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
         }
         # 打点 + 评估 + 知识库补全（衔接模块 3 质检/补全）
         self.metrics.counter("requests")

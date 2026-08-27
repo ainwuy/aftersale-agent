@@ -25,7 +25,7 @@ MODEL_BGE_M3 = "BAAI/bge-m3"
 MODEL_QWEN_EMBED = "qwen3.7-text-embedding"             # DashScope（百炼）嵌入模型
 SILICONFLOW_BASE = "https://api.siliconflow.cn/v1"
 DASHSCOPE_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"  # 与 cs_supervisor 的 chat 同域名
-EMBED_BATCH = 16  # 一次 API 调用最多嵌入条数（DashScope 单次上限 20 行）
+EMBED_BATCH = int(os.getenv("AFTERSALE_EMBED_BATCH", "16"))  # 一次 API 调用最多嵌入条数（DashScope 单次上限 20 行）
 
 
 class BgeM3EmbeddingFunction(EmbeddingFunction):
@@ -92,8 +92,9 @@ class FAQVectorStore:
         meta = {"hnsw:space": "cosine", "embed": self.embed_fn.backend, "model": self.embed_fn.model}
         try:
             col = self.client.get_collection(self.collection_name)
-            # 后端/模型变了（如测试桩换真 bge-m3）→ 旧索引作废，删除重建
-            if (col.metadata or {}).get("embed") != meta["embed"]:
+            # 后端或模型变了（如换 qwen→bge-m3）→ 旧索引作废（维度可能不一致），删除重建
+            col_meta = col.metadata or {}
+            if col_meta.get("embed") != meta["embed"] or col_meta.get("model") != meta["model"]:
                 self.client.delete_collection(self.collection_name)
                 return self.client.create_collection(self.collection_name,
                                                      embedding_function=self.embed_fn,

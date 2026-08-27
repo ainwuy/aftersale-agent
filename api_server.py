@@ -42,6 +42,8 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 # 会话登记表（记录元数据 + 当前状态 + 所属用户；图状态本身在 MemorySaver 里按 session_id 存）
 SESSIONS: dict[str, dict[str, Any]] = {}
+# 会话登记容量上限：超出后按创建时间淘汰最旧会话（纯内存表，防无界增长；重启即清空）
+MAX_SESSIONS = int(os.getenv("AFTERSALE_MAX_SESSIONS", "1000"))
 
 
 # ===== 请求体 =====
@@ -97,10 +99,37 @@ def _run(sid: str, invoke_input: dict) -> dict:
     }
 
 
-def _get_session(session_id: str) -> dict:
-    if session_id not in SESSIONS:
+def _get_session(session_id: str, user: str) -> dict:
+    """读取会话登记，并校验归属：session 必须属于当前登录用户（防 IDOR 越权）。"""
+    s = SESSIONS.get(session_id)
+    if s is None:
         raise HTTPException(status_code=404, detail="session not found")
-    return SESSIONS[session_id]
+    if s.get("username") != user:
+        raise HTTPException(status_code=403, detail="无权访问该会话")
+    return s
+
+
+def _has_pending_interrupt(session_id: str) -> bool:
+    """检查图当前是否真的停在 human_approve 的 interrupt 上。
+    防止重复 approve/reject（如并发双击）对已恢复的会话再次 resume 抛错。
+    """
+    snap = app.get_state(thread_cfg(session_id))
+    return bool(snap and "__interrupt__" in (snap.next or []))
+
+
+def _build_session_data(session_id: str, s: dict, st: dict) -> dict:
+    """把会话登记 + 图状态组装成质检/补全模块需要的 session_data（统一结构）。"""
+    return {
+        "session_id": session_id,
+        "messages": st.get("messages", []),
+        "category": st.get("category", ""),
+        "context": st.get("context", ""),
+        "draft": st.get("draft", ""),
+        "status": s["status"],
+        "review_count": st.get("review_count", 0),
+        "created_at": s.get("created_at"),
+        "completed_at": s.get("completed_at"),
+    }
 
 
 # ===== FastAPI 应用 =====
@@ -160,6 +189,10 @@ def rl_status(data: dict = Depends(rate_limit_status)):
 @api.post("/api/sessions")
 def create_session(req: StartRequest, user: str = Depends(user_rate_limit)):
     sid = str(uuid.uuid4())
+    if len(SESSIONS) >= MAX_SESSIONS:
+        # 容量保护：淘汰创建时间最早的会话（内存登记表，图状态仍在 checkpointer 里）
+        oldest = min(SESSIONS, key=lambda k: SESSIONS[k].get("created_at", ""))
+        del SESSIONS[oldest]
     SESSIONS[sid] = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "status": "pending_approval",
@@ -170,32 +203,36 @@ def create_session(req: StartRequest, user: str = Depends(user_rate_limit)):
 
 @api.post("/api/sessions/{session_id}/messages")
 def send_message(session_id: str, req: MessageRequest, user: str = Depends(user_rate_limit)):
-    _get_session(session_id)
+    _get_session(session_id, user)
     # 多轮续聊：只追加用户消息，不重置结构化字段（由 checkpointer 续跑）
     return _run(session_id, {"messages": [req.message]})
 
 
 @api.post("/api/sessions/{session_id}/approve")
 def approve(session_id: str, user: str = Depends(user_rate_limit)):
-    s = _get_session(session_id)
+    s = _get_session(session_id, user)
     if s["status"] == "completed":
         raise HTTPException(status_code=409, detail="session already completed")
+    if not _has_pending_interrupt(session_id):
+        raise HTTPException(status_code=409, detail="会话当前无待审核的成稿（可能已处理或仍在生成中）")
     # 批准：resume 给 human_approve 一个 approve 决策，图跑完并落盘 reply.md
     return _run(session_id, Command(resume={"action": "approve", "feedback": ""}))
 
 
 @api.post("/api/sessions/{session_id}/reject")
 def reject(session_id: str, req: RejectRequest, user: str = Depends(user_rate_limit)):
-    s = _get_session(session_id)
+    s = _get_session(session_id, user)
     if s["status"] == "completed":
         raise HTTPException(status_code=409, detail="session already completed")
+    if not _has_pending_interrupt(session_id):
+        raise HTTPException(status_code=409, detail="会话当前无待审核的成稿（可能已处理或仍在生成中）")
     # 驳回：带修改意见退回 respond 重写（最多 AFTERSALE_MAX_REJECT 次后强制发送）
     return _run(session_id, Command(resume={"action": "reject", "feedback": req.feedback}))
 
 
 @api.get("/api/sessions/{session_id}")
 def get_session(session_id: str, user: str = Depends(user_rate_limit)):
-    s = _get_session(session_id)
+    s = _get_session(session_id, user)
     st = _state(session_id)
     return {
         "session_id": session_id,
@@ -213,20 +250,9 @@ def get_session(session_id: str, user: str = Depends(user_rate_limit)):
 def get_quality(session_id: str, user: str = Depends(user_rate_limit)):
     """对一次会话做质检：响应时间/检索命中/禁用词/驳回次数等，返回 quality_report。"""
     from quality_inspector import inspect_session
-    s = _get_session(session_id)
+    s = _get_session(session_id, user)
     st = _state(session_id)
-    session_data = {
-        "session_id": session_id,
-        "messages": st.get("messages", []),
-        "category": st.get("category", ""),
-        "context": st.get("context", ""),
-        "draft": st.get("draft", ""),
-        "status": s["status"],
-        "review_count": st.get("review_count", 0),
-        "created_at": s.get("created_at"),
-        "completed_at": s.get("completed_at"),
-    }
-    return inspect_session(session_data)
+    return inspect_session(_build_session_data(session_id, s, st))
 
 
 @api.post("/api/knowledge/suggest/{session_id}")
@@ -235,20 +261,9 @@ def suggest_faq(session_id: str, user: str = Depends(user_rate_limit)):
     只有质检通过+未命中现有 FAQ+成稿被人工 approve 才会真正追加。
     """
     from quality_inspector import quality_and_update
-    s = _get_session(session_id)
+    s = _get_session(session_id, user)
     st = _state(session_id)
-    session_data = {
-        "session_id": session_id,
-        "messages": st.get("messages", []),
-        "category": st.get("category", ""),
-        "context": st.get("context", ""),
-        "draft": st.get("draft", ""),
-        "status": s["status"],
-        "review_count": st.get("review_count", 0),
-        "created_at": s.get("created_at"),
-        "completed_at": s.get("completed_at"),
-    }
-    report = quality_and_update(session_data)
+    report = quality_and_update(_build_session_data(session_id, s, st))
     return report
 
 

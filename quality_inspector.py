@@ -41,11 +41,16 @@ def inspect_session(session_data: dict) -> dict:
     created = session_data.get("created_at")
     completed = session_data.get("completed_at")
     if created and completed:
-        elapsed = (datetime.fromisoformat(completed) - datetime.fromisoformat(created)).total_seconds()
-        report["response_time_sec"] = round(elapsed, 1)
-        if elapsed > QUALITY_RULES["max_response_time_sec"]:
-            report["issues"].append(f"响应超时（{int(elapsed)}s > {QUALITY_RULES['max_response_time_sec']}s）")
-            report["score"] -= 20
+        try:
+            elapsed = (datetime.fromisoformat(completed) - datetime.fromisoformat(created)).total_seconds()
+        except (TypeError, ValueError):
+            # 防御：created_at/completed_at 时区或格式不一致（aware/naive 混用）时跳过该项，不崩
+            elapsed = None
+        if elapsed is not None:
+            report["response_time_sec"] = round(elapsed, 1)
+            if elapsed > QUALITY_RULES["max_response_time_sec"]:
+                report["issues"].append(f"响应超时（{int(elapsed)}s > {QUALITY_RULES['max_response_time_sec']}s）")
+                report["score"] -= 20
 
     # 规则 2：检索是否命中
     context = session_data.get("context", "") or ""
@@ -148,8 +153,10 @@ def append_to_faq(faq_entry: dict, faq_path: str = None) -> bool:
         return False
 
     # 追加到文件末尾
+    # 标题用「xx类（自动补全）」而非「自动补全 · xx类」：cs_supervisor._clean_cat
+    # 能把它清洗回标准大类（去「（自动补全）」+ 去「类」），否则向量检索按 category 过滤会漏掉补全条目。
     block = f"""
-## 自动补全 · {faq_entry['category']}类
+## {faq_entry['category']}类（自动补全）
 
 **Q：{faq_entry['question']}**
 A：{faq_entry['answer']}

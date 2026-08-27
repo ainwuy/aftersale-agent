@@ -11,6 +11,7 @@
 - 接口签名与真 ERP 对齐，生产时只需把 _conn 换成 HTTP 客户端
 """
 import os
+import secrets
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -184,7 +185,8 @@ def apply_refund(order_no: str, amount: float, reason: str) -> dict:
             return {"ok": False, "error": f"订单 {order_no} 不存在"}
         if amount > order["amount"]:
             return {"ok": False, "error": f"退款金额 {amount} 超过订单金额 {order['amount']}"}
-        refund_no = f"RF{int(time.time())}"
+        # 退款单号：毫秒时间戳 + 6 位随机后缀，避免同秒并发生成相同单号触发 UNIQUE 冲突
+        refund_no = f"RF{int(time.time() * 1000)}{secrets.token_hex(3)}"
         c.execute("INSERT INTO refunds (refund_no, order_no, username, amount, reason, status, created_at) VALUES (?,?,?,?,?,?,?)",
                   (refund_no, order_no, order["username"], amount, reason, "approved", datetime.now().isoformat()))
         c.execute("UPDATE orders SET status='refunded', updated_at=? WHERE order_no=?",

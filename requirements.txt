@@ -31,3 +31,5 @@ PyJWT==2.13.0
 
 # ---- 跨进程会话持久化（RedisSaver，需 Redis Stack 服务）----
 redis==7.4.1
+# RedisSaver 插件包（提供 langgraph.checkpoint.redis，langgraph 1.2.5 配套 checkpoint 4.x）
+langgraph-checkpoint-redis==0.5.2
