@@ -112,12 +112,17 @@ def _row_to_dict(row) -> dict:
     return {k: row[k] for k in row.keys()} if row else {}
 
 
-def get_order(order_no: str) -> Optional[dict]:
-    """查询单个订单详情（含物流轨迹）。"""
+def get_order(order_no: str, username: str = "") -> Optional[dict]:
+    """查询单个订单详情（含物流轨迹）。
+
+    username 非空时做归属校验：订单不属于该用户则视同不存在（防越权信息泄露）。
+    """
     with _conn() as c:
         order = c.execute("SELECT * FROM orders WHERE order_no = ?", (order_no,)).fetchone()
         if not order:
             return None
+        if username and order["username"] != username:
+            return None   # 归属校验失败：不暴露他人订单
         result = _row_to_dict(order)
         if order["tracking_no"]:
             ship = c.execute("SELECT * FROM shipments WHERE tracking_no = ?",
@@ -134,12 +139,20 @@ def list_user_orders(username: str) -> list[dict]:
         return [_row_to_dict(r) for r in rows]
 
 
-def track_shipment(tracking_no: str) -> Optional[dict]:
-    """查物流轨迹。"""
+def track_shipment(tracking_no: str, username: str = "") -> Optional[dict]:
+    """查物流轨迹。username 非空时校验物流单归属当前用户。"""
     with _conn() as c:
         row = c.execute("SELECT * FROM shipments WHERE tracking_no = ?",
                         (tracking_no,)).fetchone()
-        return _row_to_dict(row) if row else None
+        if not row:
+            return None
+        result = _row_to_dict(row)
+        if username:
+            order = c.execute("SELECT username FROM orders WHERE order_no = ?",
+                              (result["order_no"],)).fetchone()
+            if not order or order["username"] != username:
+                return None   # 归属校验失败：不暴露他人物流信息
+        return result
 
 
 def update_order_status(order_no: str, new_status: str, tracking_no: str = None) -> dict:
@@ -164,12 +177,17 @@ def update_order_status(order_no: str, new_status: str, tracking_no: str = None)
         return {"ok": True, "order_no": order_no, "new_status": new_status}
 
 
-def create_return_order(order_no: str, reason: str) -> dict:
-    """申请退货（订单状态 → return_requested）。"""
+def create_return_order(order_no: str, reason: str, username: str = "") -> dict:
+    """申请退货（订单状态 → return_requested）。
+
+    username 非空时校验订单归属，防止越权操作他人订单。
+    """
     with _conn() as c:
         order = c.execute("SELECT * FROM orders WHERE order_no = ?", (order_no,)).fetchone()
         if not order:
             return {"ok": False, "error": f"订单 {order_no} 不存在"}
+        if username and order["username"] != username:
+            return {"ok": False, "error": f"订单 {order_no} 不属于用户 {username}，无权操作"}
         if order["status"] not in ("delivered", "shipped"):
             return {"ok": False, "error": f"订单状态 {order['status']} 不支持退货（需已发货或已签收）"}
         c.execute("UPDATE orders SET status='return_requested', updated_at=? WHERE order_no=?",
@@ -177,12 +195,17 @@ def create_return_order(order_no: str, reason: str) -> dict:
         return {"ok": True, "order_no": order_no, "new_status": "return_requested", "reason": reason}
 
 
-def apply_refund(order_no: str, amount: float, reason: str) -> dict:
-    """申请退款（创建退款单，订单状态 → refunded）。"""
+def apply_refund(order_no: str, amount: float, reason: str, username: str = "") -> dict:
+    """申请退款（创建退款单，订单状态 → refunded）。
+
+    username 非空时校验订单归属，防止越权操作他人订单。
+    """
     with _conn() as c:
         order = c.execute("SELECT * FROM orders WHERE order_no = ?", (order_no,)).fetchone()
         if not order:
             return {"ok": False, "error": f"订单 {order_no} 不存在"}
+        if username and order["username"] != username:
+            return {"ok": False, "error": f"订单 {order_no} 不属于用户 {username}，无权操作"}
         if amount > order["amount"]:
             return {"ok": False, "error": f"退款金额 {amount} 超过订单金额 {order['amount']}"}
         # 退款单号：毫秒时间戳 + 6 位随机后缀，避免同秒并发生成相同单号触发 UNIQUE 冲突

@@ -5,6 +5,7 @@ faq_chromadb/
 reply.md
 users.db
 orders.db
+sessions.db
 logs/
 reports/
 

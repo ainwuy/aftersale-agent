@@ -61,6 +61,20 @@ class OrderSystemTest(unittest.TestCase):
         r = ods.update_order_status("CS20260820003", "非法状态")
         self.assertFalse(r["ok"])
 
+    def test_ownership_check(self):
+        # 越权防护：mallory 不能操作/查看 alice 的订单（username 非空时校验归属）
+        r = ods.create_return_order("CS20260820001", "测试退货", username="mallory")
+        self.assertFalse(r["ok"])
+        self.assertIn("不属于", r["error"])
+        r = ods.apply_refund("CS20260820001", 100.0, "测试退款", username="mallory")
+        self.assertFalse(r["ok"])
+        # 查询隔离：非本人查不到（视同不存在，不泄露他人信息）
+        self.assertIsNone(ods.get_order("CS20260820001", username="mallory"))
+        # 本人可以正常查询
+        self.assertIsNotNone(ods.get_order("CS20260820001", username="alice"))
+        # username 为空（CLI 演示场景）不校验，保持兼容
+        self.assertIsNotNone(ods.get_order("CS20260820001", username=""))
+
 
 if __name__ == "__main__":
     unittest.main()

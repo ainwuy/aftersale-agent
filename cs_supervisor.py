@@ -180,6 +180,7 @@ class State(TypedDict):
     context: str                              # 检索 Agent 输出（检索到的 FAQ）
     draft: str                                # 回答 Agent 成稿
     review_count: int                         # 已被退回修改的次数
+    username: str                             # 当前登录用户（业务工具归属校验用，Web 由 api_server 注入）
 
 
 class Route(TypedDict):
@@ -222,7 +223,13 @@ def route(state):
 
 
 # ===== 通用 ReAct 循环（LLM -> tool_calls? -> ToolNode -> LLM -> ...）=====
-def _agent_loop(state, tools, system_prompt, name, max_inner=4):
+# 需要做归属校验的业务工具名（这些工具带 username 参数，由本函数注入当前用户，
+# LLM 不知道真实用户名，禁止它自行传参 —— 防越权操作他人订单）
+_USER_SCOPED_TOOLS = {"lookup_order", "list_user_orders", "track_logistics",
+                      "request_return", "request_refund"}
+
+
+def _agent_loop(state, tools, system_prompt, name, max_inner=4, username=""):
     # 工具名 → 工具对象 映射，方便手动调
     tool_map = {t.name: t for t in tools} if tools else {}
     msgs = [SystemMessage(system_prompt)] + list(state["messages"])
@@ -239,7 +246,10 @@ def _agent_loop(state, tools, system_prompt, name, max_inner=4):
             try:
                 tool_obj = tool_map.get(tc["name"])
                 if tool_obj:
-                    tool_result = tool_obj.invoke(tc.get("args", {}))
+                    args = dict(tc.get("args", {}))
+                    if username and tool_obj.name in _USER_SCOPED_TOOLS:
+                        args["username"] = username   # 强制注入当前用户，覆盖 LLM 猜测值
+                    tool_result = tool_obj.invoke(args)
                     msgs.append(ToolMessage(content=str(tool_result), tool_call_id=tc.get("id", "")))
                 else:
                     msgs.append(ToolMessage(content=f"（工具 {tc['name']} 不存在）", tool_call_id=tc.get("id", "")))
@@ -291,6 +301,7 @@ def retrieve(state):
             "禁止返回空。返回的工具调用结果将作为上下文交给回答 Agent。"
         ),
         name="retrieve",
+        username=state.get("username", ""),
     )
     # 从新增消息里取最后一条 ToolMessage 作为检索上下文
     ctx = ""
@@ -398,11 +409,16 @@ app = g.compile(checkpointer=checkpointer)
 
 
 # ===== 供 API / 外部调用的会话入口（不依赖交互式 input）=====
-def new_session_input(user_message: str) -> dict:
-    """首轮调用所需的输入（含初始结构化字段 + 用户消息）。"""
+def new_session_input(user_message: str, username: str = "") -> dict:
+    """首轮调用所需的输入（含初始结构化字段 + 用户消息）。
+
+    username：当前登录用户（Web 场景由 api_server 注入，用于业务工具归属校验；
+    CLI 演示留空则跳过校验，保持可离线跑通）。
+    """
     return {
         "messages": [HumanMessage(user_message)],
         "step": 0, "category": "", "context": "", "draft": "", "review_count": 0,
+        "username": username,
     }
 
 
@@ -417,7 +433,7 @@ if __name__ == "__main__":
     print("=== 售后客服多 Agent（Supervisor 模式）===")
     result = app.invoke({
         "messages": [HumanMessage("我买的鞋子尺码不合适想退货，怎么操作？")],
-        "step": 0, "category": "", "context": "", "draft": "", "review_count": 0,
+        "step": 0, "category": "", "context": "", "draft": "", "review_count": 0, "username": "",
     }, thread)
 
     # 图会在 human_approve 的 interrupt() 处暂停,result 里带 __interrupt__

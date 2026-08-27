@@ -13,7 +13,9 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -40,10 +42,68 @@ _CORS = os.getenv("AFTERSALE_CORS_ORIGINS", "*")
 CORS_ORIGINS = [o.strip() for o in _CORS.split(",") if o.strip()]
 STATIC_DIR = Path(__file__).parent / "static"
 
-# 会话登记表（记录元数据 + 当前状态 + 所属用户；图状态本身在 MemorySaver 里按 session_id 存）
-SESSIONS: dict[str, dict[str, Any]] = {}
-# 会话登记容量上限：超出后按创建时间淘汰最旧会话（纯内存表，防无界增长；重启即清空）
+# ===== 会话登记表（元数据 + 状态 + 所属用户）=====
+# 双写策略：内存 SESSIONS 做读写缓存（快），sessions.db 做持久化（重启不丢）。
+# 图状态本身在 checkpointer 里按 session_id 存，本表只存"登记信息"。
+SESSIONS_DB = Path(__file__).parent / "sessions.db"
+# 会话登记容量上限：超出后按创建时间淘汰最旧会话
 MAX_SESSIONS = int(os.getenv("AFTERSALE_MAX_SESSIONS", "1000"))
+
+
+@contextmanager
+def _sconn() -> sqlite3.Connection:
+    """sessions.db 连接上下文：提交事务并关闭（防句柄泄漏）。"""
+    conn = sqlite3.connect(SESSIONS_DB)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _init_sessions_db() -> None:
+    with _sconn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending_approval',
+                created_at TEXT,
+                completed_at TEXT
+            )""")
+
+
+def _sess_load_all() -> dict[str, dict[str, Any]]:
+    """启动时从磁盘加载全部会话登记（重启不丢）。"""
+    if not SESSIONS_DB.exists():
+        return {}
+    with _sconn() as conn:
+        rows = conn.execute(
+            "SELECT session_id, username, status, created_at, completed_at FROM sessions").fetchall()
+    return {r["session_id"]: {k: r[k] for k in ("username", "status", "created_at", "completed_at")}
+            for r in rows}
+
+
+def _sess_sync(sid: str) -> None:
+    """把内存中的一条会话登记同步到磁盘（INSERT OR REPLACE）。"""
+    d = SESSIONS[sid]
+    with _sconn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO sessions(session_id, username, status, created_at, completed_at)"
+            " VALUES (?,?,?,?,?)",
+            (sid, d.get("username", ""), d.get("status", ""),
+             d.get("created_at"), d.get("completed_at")))
+
+
+def _sess_delete(sid: str) -> None:
+    """从磁盘删除一条会话登记（容量淘汰时调用）。"""
+    with _sconn() as conn:
+        conn.execute("DELETE FROM sessions WHERE session_id=?", (sid,))
+
+
+_init_sessions_db()
+SESSIONS: dict[str, dict[str, Any]] = _sess_load_all()
 
 
 # ===== 请求体 =====
@@ -86,6 +146,7 @@ def _run(sid: str, invoke_input: dict) -> dict:
         SESSIONS[sid]["created_at"] = datetime.now(timezone.utc).isoformat()
     if status == "completed":
         SESSIONS[sid]["completed_at"] = datetime.now(timezone.utc).isoformat()
+    _sess_sync(sid)   # 状态变化同步到 sessions.db（重启不丢）
 
     st = _state(sid)
     return {
@@ -190,22 +251,28 @@ def rl_status(data: dict = Depends(rate_limit_status)):
 def create_session(req: StartRequest, user: str = Depends(user_rate_limit)):
     sid = str(uuid.uuid4())
     if len(SESSIONS) >= MAX_SESSIONS:
-        # 容量保护：淘汰创建时间最早的会话（内存登记表，图状态仍在 checkpointer 里）
+        # 容量保护：淘汰创建时间最早的会话（内存 + 磁盘同步删除）
         oldest = min(SESSIONS, key=lambda k: SESSIONS[k].get("created_at", ""))
         del SESSIONS[oldest]
+        _sess_delete(oldest)
     SESSIONS[sid] = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "status": "pending_approval",
         "username": user,
     }
-    return _run(sid, new_session_input(req.message))
+    _sess_sync(sid)   # 首次登记即落盘
+    return _run(sid, new_session_input(req.message, username=user))
 
 
 @api.post("/api/sessions/{session_id}/messages")
 def send_message(session_id: str, req: MessageRequest, user: str = Depends(user_rate_limit)):
-    _get_session(session_id, user)
-    # 多轮续聊：只追加用户消息，不重置结构化字段（由 checkpointer 续跑）
-    return _run(session_id, {"messages": [req.message]})
+    s = _get_session(session_id, user)
+    if s["status"] == "pending_approval":
+        # 决策清单约定：有成稿待人工审核时，用户必须先批准/驳回，再继续提问（防状态机混乱）
+        raise HTTPException(status_code=409,
+                            detail="当前有回复待人工审核，请先批准发送或驳回重写后再继续提问")
+    # 多轮续聊：只追加用户消息，不重置结构化字段（由 checkpointer 续跑）；username 同步注入
+    return _run(session_id, {"messages": [req.message], "username": user})
 
 
 @api.post("/api/sessions/{session_id}/approve")
