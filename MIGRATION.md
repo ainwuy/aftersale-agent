@@ -2,6 +2,7 @@
 
 > 目标：把代码 + 环境一次性搬到另一台电脑，**clone 后一条命令直接进入开发状态**，无需手动装 Python / Redis / 依赖。
 > 策略：**Docker 容器化**（环境随镜像走）+ **数据自动初始化**（代码天然幂等）+ **.env 托管密钥**（敏感信息不入库）。
+> RedisSaver 专项部署（含 docker run / compose 两种方式、验证与排查）：见 **[REDIS_DEPLOY.md](./REDIS_DEPLOY.md)**。
 
 ---
 
