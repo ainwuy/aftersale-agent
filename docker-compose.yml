@@ -1,9 +1,17 @@
 # ============================================================
-# aftersale-cs 全栈编排（迁移到新电脑的最简方式）
-# 一条命令启动：docker compose up -d
-# 包含：
-#   - redis-stack : Redis 7.x + RediSearch 模块（LangGraph RedisSaver 必需）
-#   - api         : aftersale-cs FastAPI 服务（可选，不想要可注释掉）
+# aftersale-agent 全栈编排 —— 一键开箱即用
+# 一条命令：docker compose up -d --build
+#   目标电脑只需：Docker Desktop（已装）+ 本项目代码（git clone 或拷贝）
+#   无需手动装 Python / Redis / 依赖 —— 全部容器化
+#
+# 服务：
+#   redis-stack : Redis 7.x + RediSearch（LangGraph RedisSaver 必需）
+#   api         : aftersale-agent FastAPI 服务（源码挂载 + 热重载，改代码即生效）
+#
+# 数据持久化（关键设计）：
+#   api 卷挂载 .:/app → users.db / orders.db / faq_chromadb / 客服FAQ.md
+#   全部落在宿主机项目目录，容器删了数据也不丢；
+#   首次启动自动初始化（建 admin 用户 / 种子订单 / 重建向量索引）—— 代码天然幂等
 # ============================================================
 services:
   # ---- Redis Stack（带 RediSearch，RedisSaver 必需）----
@@ -12,10 +20,9 @@ services:
     container_name: aftersale-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"          # Windows 上 Docker Desktop 自动映射到 127.0.0.1
+      - "6379:6379"          # 宿主机 127.0.0.1:6379
     volumes:
-      # 持久化：把 Redis 数据目录挂到宿主机，容器删了数据也不丢
-      - redis-data:/data
+      - redis-data:/data     # Redis 的 dump.rdb / appendonly.aof 持久化
     command: >
       redis-stack-server
       --save 60 1
@@ -26,22 +33,31 @@ services:
       timeout: 3s
       retries: 5
 
-  # ---- aftersale-cs API 服务（可选：去掉注释即启用）----
-  # api:
-  #   build: .
-  #   container_name: aftersale-api
-  #   restart: unless-stopped
-  #   depends_on:
-  #     redis-stack:
-  #       condition: service_healthy
-  #   environment:
-  #     - AFTERSALE_CHECKPOINTER=redis
-  #     - AFTERSALE_REDIS_HOST=redis-stack   # 容器内用服务名互访
-  #     - AFTERSALE_REDIS_PORT=6379
-  #     - QWEN=${QWEN}
-  #   ports:
-  #     - "8000:8000"
-  #   command: uvicorn api_server:api --host 0.0.0.0 --port 8000
+  # ---- aftersale-agent API 服务（开发模式：源码挂载 + 热重载）----
+  api:
+    build: .
+    container_name: aftersale-api
+    restart: unless-stopped
+    depends_on:
+      redis-stack:
+        condition: service_healthy     # 等 Redis 就绪再启动，避免连不上回退 MemorySaver
+    env_file:
+      - .env                           # 敏感信息全部走 .env（不入库）
+    environment:
+      # 容器内用服务名互访（宿主机跑则用 127.0.0.1）
+      AFTERSALE_REDIS_HOST: redis-stack
+      AFTERSALE_REDIS_PORT: "6379"
+      AFTERSALE_REDIS_DB: "0"
+      # 跨进程持久化：多 uvicorn worker 共享 thread_id 状态
+      AFTERSALE_CHECKPOINTER: redis
+    volumes:
+      - .:/app                         # 源码挂载：改代码即时生效（热重载）
+    ports:
+      - "8000:8000"
+    command: >
+      uvicorn api_server:api
+      --host 0.0.0.0 --port 8000
+      --reload                         # 开发模式热重载（生产去掉 --reload）
 
 volumes:
-  redis-data:    # 命名卷：Redis 的 dump.rdb / appendonly.aof 存这里
+  redis-data:                          # 命名卷：Redis 数据
