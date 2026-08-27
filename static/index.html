@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>售后智能客服 · 多 Agent 演示台</title>
+<style>
+:root{
+  --bg:#f5f7fa; --card:#fff; --border:#e3e8ef; --text:#1f2d3d; --muted:#7a8699;
+  --primary:#185FA5; --primary-weak:#e6f1fb; --ok:#0F6E56; --ok-weak:#e1f5ee;
+  --warn:#b45309; --warn-weak:#faeeda; --danger:#a32d2d; --danger-weak:#fcebeb;
+  --radius:12px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.6}
+#app{max-width:960px;margin:0 auto;padding:20px}
+header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px;flex-wrap:wrap;gap:10px}
+h1{font-size:16px;font-weight:600}
+.userbox{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px}
+.btn{cursor:pointer;border:1px solid var(--border);background:var(--card);color:var(--text);padding:7px 14px;border-radius:8px;font-size:13px;font-family:inherit}
+.btn:hover{border-color:var(--primary);color:var(--primary)}
+.btn-primary{background:var(--primary);color:#fff;border-color:var(--primary)}
+.btn-primary:hover{opacity:.9;color:#fff}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:16px}
+.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+.status-chip{font-size:12px;padding:4px 10px;border-radius:999px;background:var(--primary-weak);color:var(--primary)}
+.quota{font-size:12px;color:var(--muted);margin-left:auto}
+#authView{max-width:400px;margin:60px auto 0}
+.tabs{display:flex;margin-bottom:14px}
+.tab{flex:1;text-align:center;padding:9px;cursor:pointer;border:1px solid var(--border);background:var(--card);color:var(--muted);font-size:13px}
+.tab:first-child{border-radius:10px 0 0 10px}
+.tab:last-child{border-radius:0 10px 10px 0}
+.tab.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+.field input{width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit}
+.field input:focus{outline:none;border-color:var(--primary)}
+#authError{color:var(--danger);font-size:13px;min-height:20px;margin-top:6px}
+/* === 聊天区（飞书风格：左 AI 头像+气泡 / 右 用户头像+气泡） === */
+#chat{display:flex;flex-direction:column;gap:14px;max-height:56vh;overflow-y:auto;padding:8px 4px}
+.row{display:flex;align-items:flex-start;gap:10px;width:100%}
+.row.row-user{flex-direction:row-reverse}
+.avatar{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;color:#fff;flex-shrink:0;user-select:none}
+.avatar.ai{background:linear-gradient(135deg,#3370ff 0%,#5b8def 100%)}
+.avatar.user{background:linear-gradient(135deg,#7a8699 0%,#a3aebd 100%)}
+.bubble{max-width:74%;padding:10px 14px;border-radius:10px;font-size:14px;line-height:1.6;word-break:break-word;white-space:pre-wrap;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.row-ai .bubble{background:#fff;border:1px solid #e8eaef;border-top-left-radius:4px;color:#1f2d3d}
+.row-user .bubble{background:#3370ff;color:#fff;border-top-right-radius:4px}
+.bubble .name{font-size:12px;color:var(--muted);margin-bottom:4px}
+.row-user .bubble .name{color:rgba(255,255,255,.85)}
+.bubble .typing{display:inline-block;color:var(--muted);animation:typing 1.4s infinite;font-style:italic}
+@keyframes typing{0%,100%{opacity:.3}50%{opacity:1}}
+.thinking{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;padding:6px 14px;background:#f5f7fa;border-radius:8px;border:1px solid #e8eaef;align-self:flex-start}
+#inputRow{display:flex;gap:10px;margin-top:14px}
+#msgInput{flex:1;padding:11px 14px;border:1px solid var(--border);border-radius:10px;font-size:14px;font-family:inherit}
+#msgInput:focus{outline:none;border-color:var(--primary)}
+.review{display:none;border:1px solid #f0c96a;background:var(--warn-weak);border-radius:var(--radius);padding:16px;margin-top:16px}
+.review.show{display:block}
+.review h3{font-size:14px;color:var(--warn);margin-bottom:8px}
+.review .draft{background:#fff;border:1px solid #eadcae;border-radius:8px;padding:12px;white-space:pre-wrap;font-size:13.5px;margin-bottom:12px}
+.review textarea{width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;min-height:60px}
+.review .row{display:flex;gap:10px;margin-top:10px}
+.banner{display:none;padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px}
+.banner.error{display:block;background:var(--danger-weak);color:var(--danger)}
+#meta{font-size:12px;color:var(--muted);margin-top:10px}
+.loading{color:var(--muted);font-size:12px;text-align:center;padding:6px}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <header>
+    <h1>售后智能客服 · 多 Agent 演示台</h1>
+    <div class="userbox">
+      <span id="curUser"></span>
+      <button type="button" class="btn" id="logoutBtn" style="display:none" onclick="showAuth()">退出</button>
+    </div>
+  </header>
+
+  <div class="banner" id="banner"></div>
+
+  <!-- ===== 登录 / 注册 ===== -->
+  <div id="authView" class="card">
+    <div class="tabs">
+      <div class="tab active" data-tab="login">登录</div>
+      <div class="tab" data-tab="register">注册</div>
+    </div>
+    <form id="authForm" onsubmit="return false;">
+      <div class="field"><label>用户名</label><input id="aUser" autocomplete="username" placeholder="3~32 个字符"></div>
+      <div class="field"><label>密码</label><input id="aPass" type="password" autocomplete="current-password" placeholder="至少 6 位" onkeydown="if(event.key==='Enter')doAuth()"></div>
+      <button type="button" class="btn btn-primary" id="authBtn" style="width:100%" onclick="doAuth()">登 录</button>
+    </form>
+    <div id="authError"></div>
+    <p style="font-size:12px;color:var(--muted);margin-top:10px">内置管理员：admin / admin123（首次启动自动创建，请登录后尽快修改）</p>
+  </div>
+
+  <!-- ===== 主界面 ===== -->
+  <div id="mainView" style="display:none">
+    <div class="toolbar">
+      <button type="button" class="btn btn-primary" id="newBtn" onclick="resetChat()">＋ 新建会话</button>
+      <span class="status-chip" id="sessionStatus">未开始</span>
+      <span class="quota" id="quota"></span>
+    </div>
+
+    <div class="card" style="padding:14px;background:#f5f7fa;border:none">
+      <div id="chat"></div>
+      <div id="inputRow">
+        <input id="msgInput" placeholder="输入售后问题，如：我买的鞋子尺码不合适想退货，怎么操作？" onkeydown="if(event.key==='Enter'&&!busy)send()">
+          <button type="button" class="btn btn-primary" id="sendBtn" onclick="send()">发送</button>
+        </div>
+      </div>
+
+      <!-- 人工审核卡片 -->
+      <div class="review" id="reviewBox">
+        <h3>📋 待人工审核（human-in-the-loop）</h3>
+        <div class="draft" id="reviewDraft"></div>
+        <textarea id="reviewFeedback" placeholder="驳回时填写修改意见（批准可留空）"></textarea>
+        <div class="row">
+          <button type="button" class="btn btn-primary" id="approveBtn" onclick="approve()">✅ 批准发送</button>
+          <button type="button" class="btn" id="rejectBtn" onclick="reject()">↩️ 驳回重写</button>
+        </div>
+      </div>
+
+      <div id="meta"></div>
+    </div>
+</div>
+
+<!-- 关键：去掉 type="module" 改普通内联 script。普通 script 立即同步执行，所有函数立刻可用，inline onclick 引用得到 -->
+<script>
+const $ = s => document.getElementById(s);  // 关键：getElementById（不是 querySelector，querySelector 需要 '#' 前缀）
+
+let token = localStorage.getItem('cs_token') || '';
+let currentSid = null;
+let busy = false;
+
+function setStyle(id, val) { const el = $(id); if (el) el.style.display = val; else console.warn('missing element:', id); }
+function setText(id, val) { const el = $(id); if (el) el.textContent = val; }
+function bind(id, evt, fn) { const el = $(id); if (el) el.addEventListener(evt, fn); else console.warn('bind skipped (no element):', id); }
+
+async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const r = await fetch(path, { ...opts, headers });
+  if (r.status === 401) { showAuth(); throw new Error('登录已过期'); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+  return data;
+}
+function banner(msg) {
+  const b = $('banner'); if (b) { b.textContent = msg; b.className = 'banner error'; setTimeout(() => b.className = 'banner', 5000); }
+}
+
+function showAuth() {
+  token = ''; localStorage.removeItem('cs_token');
+  setStyle('authView', 'block');
+  setStyle('mainView', 'none');
+  setStyle('logoutBtn', 'none');
+}
+function showApp(username) {
+  setStyle('authView', 'none');
+  setStyle('mainView', 'block');
+  setStyle('logoutBtn', 'inline-block');
+  setText('curUser', '👤 ' + username);
+  resetChat(); refreshQuota();
+}
+
+let authMode = 'login';
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  authMode = t.dataset.tab;
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
+  const btn = $('authBtn'); if (btn) btn.textContent = authMode === 'login' ? '登 录' : '注 册';
+  setText('authError', '');
+});
+
+// 关键：绑 button click（不依赖 form submit 事件，type="button" + onsubmit="return false;" 双重保险）
+async function doAuth() {
+  const username = $('aUser').value.trim(), password = $('aPass').value;
+  setText('authError', '');
+  if (!username || !password) {
+    const e2 = $('authError');
+    if (e2) { e2.style.color = 'var(--danger)'; e2.textContent = '请输入用户名和密码'; }
+    return;
+  }
+  try {
+    if (authMode === 'login') {
+      const d = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) });
+      token = d.access_token; localStorage.setItem('cs_token', token);
+      showApp(d.username);
+    } else {
+      await api('/api/auth/register', { method: 'POST', body: JSON.stringify({ username, password }) });
+      authMode = 'login';
+      document.querySelectorAll('.tab')[0].classList.add('active');
+      document.querySelectorAll('.tab')[1].classList.remove('active');
+      const btn = $('authBtn'); if (btn) btn.textContent = '登 录';
+      const e2 = $('authError'); if (e2) { e2.style.color = 'var(--ok)'; e2.textContent = '注册成功，请登录'; }
+      setTimeout(() => { const e2 = $('authError'); if (e2) { e2.textContent = ''; e2.style.color = ''; } }, 3000);
+    }
+  } catch (err) {
+    const e2 = $('authError');
+    if (e2) { e2.style.color = 'var(--danger)'; e2.textContent = err.message; }
+  }
+}
+// 关键：直接 .onclick 绑定（不依赖 addEventListener/module 异步，HTML 解析完即生效）
+document.getElementById('authBtn').onclick = doAuth;
+document.getElementById('aPass').onkeydown = e => { if (e.key === 'Enter') doAuth(); };
+document.getElementById('logoutBtn').onclick = () => showAuth();
+document.getElementById('newBtn').onclick = () => resetChat();
+document.getElementById('sendBtn').onclick = () => send();
+document.getElementById('msgInput').onkeydown = e => { if (e.key === 'Enter' && !busy) send(); };
+document.getElementById('approveBtn').onclick = () => approve();
+document.getElementById('rejectBtn').onclick = () => reject();
+
+function resetChat() {
+  currentSid = null;
+  const c = $('chat'); if (c) c.innerHTML = '';
+  setText('sessionStatus', '未开始');
+  setText('meta', '');
+  hideReview();
+  const inp = $('msgInput'); if (inp) { inp.value = ''; inp.focus(); }
+}
+function setBusy(v) {
+  busy = v;
+  // 飞书式"AI 思考中"动画气泡
+  showThinking(v);
+  const s = $('sendBtn'); if (s) s.disabled = v;
+}
+
+// 飞书风格消息渲染：左 AI 头像+气泡 / 右 用户头像+气泡
+// 关键：隐藏中间过程（【分类】标签 + ToolMessage 检索结果），只显示最终成稿
+function addMessage(msg) {
+  const t = msg.type;
+  let text = (msg.content || '').toString();
+  const c = $('chat'); if (!c) return;
+
+  // === 过滤：隐藏中间过程，只保留"用户问题"+"AI 最终成稿" ===
+  if (t === 'ToolMessage' || t === 'SystemMessage') return;        // 隐藏检索/系统消息
+  if (t === 'AIMessage') {
+    if (text.startsWith('【分类】')) return;                          // 隐藏分类中间过程
+    if (text.startsWith('【成稿】')) text = text.replace(/^【成稿】/, '').trim();  // 去掉成稿前缀
+    if (!text) return;                                               // 空内容不显示
+  }
+  if (t === 'HumanMessage') text = text.trim();
+
+  const isUser = t === 'HumanMessage';
+  const row = document.createElement('div');
+  row.className = 'row ' + (isUser ? 'row-user' : 'row-ai');
+
+  // 头像
+  const av = document.createElement('div');
+  av.className = 'avatar ' + (isUser ? 'user' : 'ai');
+  av.textContent = isUser ? '我' : 'AI';
+  row.appendChild(av);
+
+  // 气泡
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.textContent = text;
+  row.appendChild(bubble);
+
+  c.appendChild(row);
+  c.scrollTop = c.scrollHeight;
+}
+
+// 渲染历史消息（先过滤再渲染，避免短暂闪现中间过程）
+function renderMessages(msgs) {
+  const c = $('chat'); if (!c) return;
+  c.innerHTML = '';
+  (msgs || []).forEach(addMessage);
+}
+
+// AI 思考中提示（飞书式"对方正在输入"）
+function showThinking(on) {
+  const c = $('chat'); if (!c) return;
+  $('thinking')?.remove();
+  if (!on) return;
+  const t = document.createElement('div');
+  t.id = 'thinking';
+  t.className = 'thinking';
+  t.innerHTML = '<span class="avatar ai" style="width:24px;height:24px;font-size:11px;border-radius:6px">AI</span> 智能客服思考中<span class="typing">...</span>';
+  c.appendChild(t);
+  c.scrollTop = c.scrollHeight;
+}
+function hideReview() { const r = $('reviewBox'); if (r) r.classList.remove('show'); }
+function showReview(d) {
+  if (d.status !== 'pending_approval' || !d.pending_draft) { hideReview(); return; }
+  setText('reviewDraft', d.pending_draft);
+  const r = $('reviewBox'); if (r) r.classList.add('show');
+}
+function renderState(d) {
+  currentSid = d.session_id;
+  setText('sessionStatus', d.status === 'completed' ? '✅ 已完成' : '⏳ 待审核');
+  setText('meta', `session_id: ${d.session_id} · 分类: ${d.category || '-'} · 状态: ${d.status}`);
+  renderMessages(d.messages);
+  showReview(d);
+}
+
+async function send() {
+  const inp = $('msgInput'); const msg = inp ? inp.value.trim() : '';
+  if (!msg || busy) return;
+  setBusy(true);
+  try {
+    const path = currentSid ? `/api/sessions/${currentSid}/messages` : '/api/sessions';
+    const d = await api(path, { method: 'POST', body: JSON.stringify({ message: msg }) });
+    if (inp) inp.value = '';
+    renderState(d);
+  } catch (err) { banner(err.message); } finally { setBusy(false); }
+}
+
+async function approve() {
+  if (!currentSid || busy) return;
+  setBusy(true);
+  try { renderState(await api(`/api/sessions/${currentSid}/approve`, { method: 'POST' })); }
+  catch (err) { banner(err.message); } finally { setBusy(false); }
+}
+
+async function reject() {
+  if (!currentSid || busy) return;
+  setBusy(true);
+  try {
+    const fb = $('reviewFeedback'); const feedback = fb ? fb.value.trim() : '';
+    const d = await api(`/api/sessions/${currentSid}/reject`, { method: 'POST', body: JSON.stringify({ feedback }) });
+    renderState(d);
+    if (fb) fb.value = '';
+  } catch (err) { banner(err.message); } finally { setBusy(false); }
+}
+
+async function refreshQuota() {
+  try {
+    const d = await api('/api/rate-limit/status');
+    setText('quota', `限流：用户剩余 ${d.user_remaining}/${d.user_limit_per_window} · 窗口 ${d.window_seconds}s · IP ${d.ip_limit_per_window}/窗口`);
+  } catch (e) { /* 忽略 */ }
+}
+
+/* 启动（type="module" defer，DOM 必完整） */
+if (!token) showAuth();
+else api('/api/auth/me').then(d => showApp(d.username)).catch(() => showAuth());
+</script>
+</body>
+</html>

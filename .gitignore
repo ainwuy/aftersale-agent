@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+faq_chromadb/
+reply.md
+users.db
+orders.db
+

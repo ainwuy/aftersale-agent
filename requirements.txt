@@ -1,0 +1,33 @@
+# aftersale-cs 依赖清单
+# 安装：E:\python\code\.venv\Scripts\pip install -r requirements.txt
+
+# ---- 多 Agent 编排（LangGraph）----
+langgraph==1.2.5
+langchain-core==1.4.7
+langchain-openai==1.3.2
+langchain-community==0.4.2
+langchain-text-splitters==1.1.2
+
+# ---- 向量检索（ChromaDB + bge-m3，核心依赖）----
+chromadb==0.5.23
+# 本地嵌入后端（AFTERSALE_EMBED_BACKEND=local 时需要，含 torch，体积大）：
+# sentence-transformers==5.1.2
+
+# ---- LLM 供应商 SDK（DashScope Qwen 走 OpenAI 兼容模式，已含在 langchain-openai）----
+dashscope==1.25.21
+
+# ---- 联网检索（如需替换 lookup_faq 为真联网，可选）----
+# ddgs==9.15.0
+
+# ---- Web 服务层（FastAPI）----
+fastapi==0.141.1
+uvicorn[standard]==0.49.0
+python-dotenv==1.2.2
+pydantic==2.13.4
+httpx==0.28.1
+
+# ---- 鉴权（JWT Token）----
+PyJWT==2.13.0
+
+# ---- 跨进程会话持久化（RedisSaver，需 Redis Stack 服务）----
+redis==7.4.1

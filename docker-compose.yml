@@ -1,0 +1,47 @@
+# ============================================================
+# aftersale-cs 全栈编排（迁移到新电脑的最简方式）
+# 一条命令启动：docker compose up -d
+# 包含：
+#   - redis-stack : Redis 7.x + RediSearch 模块（LangGraph RedisSaver 必需）
+#   - api         : aftersale-cs FastAPI 服务（可选，不想要可注释掉）
+# ============================================================
+services:
+  # ---- Redis Stack（带 RediSearch，RedisSaver 必需）----
+  redis-stack:
+    image: redis/redis-stack-server:latest
+    container_name: aftersale-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"          # Windows 上 Docker Desktop 自动映射到 127.0.0.1
+    volumes:
+      # 持久化：把 Redis 数据目录挂到宿主机，容器删了数据也不丢
+      - redis-data:/data
+    command: >
+      redis-stack-server
+      --save 60 1
+      --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---- aftersale-cs API 服务（可选：去掉注释即启用）----
+  # api:
+  #   build: .
+  #   container_name: aftersale-api
+  #   restart: unless-stopped
+  #   depends_on:
+  #     redis-stack:
+  #       condition: service_healthy
+  #   environment:
+  #     - AFTERSALE_CHECKPOINTER=redis
+  #     - AFTERSALE_REDIS_HOST=redis-stack   # 容器内用服务名互访
+  #     - AFTERSALE_REDIS_PORT=6379
+  #     - QWEN=${QWEN}
+  #   ports:
+  #     - "8000:8000"
+  #   command: uvicorn api_server:api --host 0.0.0.0 --port 8000
+
+volumes:
+  redis-data:    # 命名卷：Redis 的 dump.rdb / appendonly.aof 存这里

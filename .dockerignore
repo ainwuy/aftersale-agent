@@ -1,0 +1,15 @@
+# Docker 构建时排除的文件（防止 .env/密钥/数据/缓存进镜像）
+.env
+*.db
+faq_chromadb/
+__pycache__/
+*.pyc
+users.db
+orders.db
+reply.md
+.git/
+.venv/
+venv/
+test_*.py
+Dockerfile
+docker-compose.yml
